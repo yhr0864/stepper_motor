@@ -17,6 +17,10 @@
 #define SIGNAL1 3  // signal from sensor
 #define SIGNAL2 19  // signal from sensor
 
+#define microSteps 8
+#define numBottlesTable1 2  // number of bottles on table -> 180 degrees per rotation
+#define numBottlesTable2 6  // number of bottles on table -> 60 degrees per rotation
+
 const char* rotation_finished = "Rotation Finished";
 const char* homing_completed = "Homing Completed";
 
@@ -24,21 +28,36 @@ const char* homing_completed = "Homing Completed";
 struct MotorCommand {
     bool active;
     bool isHoming;
+    int numRotations;  // for last rotation each round we need steps_per_rotation_correction
     int homingPhase;  // 0: not homing, 1: move away, 2: find home
 };
 
-MotorCommand motor1Command = {false, false, 0};
-MotorCommand motor2Command = {false, false, 0};
+MotorCommand motor1Command = {false, false, 1, 0};
+MotorCommand motor2Command = {false, false, 1, 0};
 
 // Define the motor drivers
 AccelStepper motor1(AccelStepper::DRIVER, stepPin1, dirPin1);
 AccelStepper motor2(AccelStepper::DRIVER, stepPin2, dirPin2);
 
 // Regular motor movement function
-void moveMotor(AccelStepper &motor, MotorCommand &cmd, int steps) {
-    motor.move(steps);
-    cmd.active = true;
-    cmd.isHoming = false;
+void moveMotor(AccelStepper &motor, MotorCommand &cmd, int numBottles) {
+    // for the first (numBottles-1) rotations
+    int steps_per_rotation = 200*microSteps/numBottles;
+    // for the last rotation: compensate the deviation
+    int steps_per_rotation_correction = 200*microSteps-steps_per_rotation*(numBottles-1); 
+
+    if (cmd.numRotations == numBottles) {
+        motor.move(steps_per_rotation_correction);
+        cmd.active = true;
+        cmd.isHoming = false;
+        cmd.numRotations = 1;
+    } else {
+        motor.move(steps_per_rotation);
+        cmd.active = true;
+        cmd.isHoming = false;
+        cmd.numRotations += 1;
+    }
+    
 }
 
 // Homing function
@@ -70,16 +89,9 @@ void homeMotor(AccelStepper &motor, MotorCommand &cmd, int SIGNAL) {
             motor.setCurrentPosition(0);
             cmd.active = false;
             cmd.isHoming = false;
+            cmd.numRotations = 1;
             cmd.homingPhase = 0;
             Serial.println(homing_completed);
-        }
-        else if (motor.distanceToGo() == 0) {
-            // If we hit the movement limit without finding sensor, retry
-            if (cmd.homingPhase == 1) {
-                motor.move(10000);  // Keep trying to move away
-            } else {
-                motor.move(-10000);  // Keep trying to find home
-            }
         }
     }
 }
@@ -124,20 +136,14 @@ void loop() {
             case '4': digitalWrite(LED2, LOW); break;
             
             // Motor 1 controls
-            case '5': moveMotor(motor1, motor1Command, 800); break;  // 180 degrees
-            case '6': moveMotor(motor1, motor1Command, 533); break;  // 120 degrees
+            case '5': moveMotor(motor1, motor1Command, numBottlesTable1); break;  // 180 degrees
+            case '6': moveMotor(motor1, motor1Command, -numBottlesTable1); break;  // -180 degrees
             case 'a': homeMotor(motor1, motor1Command, SIGNAL1); break;
             
             // Motor 2 controls
-            case '7': moveMotor(motor2, motor2Command, 800); break;  // 180 degrees
-            case '8': moveMotor(motor2, motor2Command, 533); break;  // 120 degrees
+            case '7': moveMotor(motor2, motor2Command, numBottlesTable2); break;  // 60 degrees
+            case '8': moveMotor(motor2, motor2Command, -numBottlesTable2); break;  // -60 degrees
             case 'b': homeMotor(motor2, motor2Command, SIGNAL2); break;
-            
-            // Both motors 180 degrees
-            case '9':
-                moveMotor(motor1, motor1Command, 800);
-                moveMotor(motor2, motor2Command, 800);
-                break;
         }
     }
 
@@ -145,7 +151,7 @@ void loop() {
     if (motor1Command.active) {
         motor1.run();
         if (motor1Command.isHoming) {
-            homeMotor(motor1, motor1Command, SIGNAL1);
+            homeMotor(motor1, motor1Command, SIGNAL1);  // Homing is not finished, still need to run 
         } else if (motor1.distanceToGo() == 0) {
             motor1Command.active = false;
             Serial.println(rotation_finished);
