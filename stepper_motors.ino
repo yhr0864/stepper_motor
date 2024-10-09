@@ -1,98 +1,196 @@
 #include <Arduino.h>
 #include <AccelStepper.h>
 
-#define stepPin 26
-#define dirPin 28
-#define nable 24
+// Define motor pins for Motor 1
+#define stepPin1 26
+#define dirPin1 28
+#define nable1 24
+
+// Define motor pins for Motor 2
+#define stepPin2 46
+#define dirPin2 48
+#define nable2 A8
 
 #define LED1 10
 #define LED2 9
-#define SIGNAL 3  // signal from sensor
 
-int incomingbyte = 0;
+#define SIGNAL1 3  // signal from sensor
+#define SIGNAL2 19  // signal from sensor
+
 const char* rotation_finished = "Rotation Finished";
 const char* homing_completed = "Homing Completed";
 
-// Define the motor driver using AccelStepper
-AccelStepper motor(AccelStepper::DRIVER, stepPin, dirPin);
+// Command queue structure
+struct MotorCommand {
+    char command;
+    bool active;
+    bool isHoming;
+    int homingPhase;  // 0: not homing, 1: moving away from sensor, 2: finding home
+};
 
-void moveUntilSensorState(bool targetState, int steps) {
-    motor.move(steps); 
-    while (digitalRead(SIGNAL) == targetState) {
-        motor.run();  // Non-blocking motor run 
+// Separate command queues for each motor
+MotorCommand motor1Command = {0, false, false, 0};
+MotorCommand motor2Command = {0, false, false, 0};
+
+// Define the motor driver using AccelStepper
+AccelStepper motor1(AccelStepper::DRIVER, stepPin1, dirPin1);
+AccelStepper motor2(AccelStepper::DRIVER, stepPin2, dirPin2);
+
+void startHoming(AccelStepper &motor, MotorCommand &cmd, int SIGNAL) {
+    cmd.isHoming = true;
+    cmd.active = true;
+    
+    if (digitalRead(SIGNAL)) {
+        // If sensor is triggered, first move away from sensor
+        cmd.homingPhase = 1;
+        motor.move(10000);  // Move forward
+    } else {
+        // If sensor is not triggered, go straight to finding home
+        cmd.homingPhase = 2;
+        motor.move(-10000);  // Move backward
     }
-    motor.stop();  // Stop the motor 
+}
+
+void executeMotor1Command(char command) {
+    switch (command) {
+        case '5':  // Motor1 rotates 180 degrees
+            motor1.move(800);
+            motor1Command.active = true;
+            motor1Command.isHoming = false;
+            break;
+        case '6':  // Motor1 rotates 120 degrees
+            motor1.move(533);
+            motor1Command.active = true;
+            motor1Command.isHoming = false;
+            break;
+        case 'a':  // Home motor1
+            startHoming(motor1, motor1Command, SIGNAL1);
+            break;
+    }
+}
+
+void executeMotor2Command(char command) {
+    switch (command) {
+        case '7':  // Motor2 rotates 180 degrees
+            motor2.move(800);
+            motor2Command.active = true;
+            motor2Command.isHoming = false;
+            break;
+        case '8':  // Motor2 rotates 120 degrees
+            motor2.move(533);
+            motor2Command.active = true;
+            motor2Command.isHoming = false;
+            break;
+        case 'b':  // Home motor2
+            startHoming(motor2, motor2Command, SIGNAL2);
+            break;
+    }
+}
+
+void processHoming(AccelStepper &motor, MotorCommand &cmd, int SIGNAL) {
+    if (!cmd.isHoming) return;
+
+    if (cmd.homingPhase == 1) {
+        // Moving away from sensor
+        if (motor.distanceToGo() == 0 || !digitalRead(SIGNAL)) {
+            // We've moved away from sensor, now find home
+            cmd.homingPhase = 2;
+            motor.move(-10000);  // Move backward to find home
+        }
+    }
+    else if (cmd.homingPhase == 2) {
+        // Finding home position
+        if (digitalRead(SIGNAL)) {
+            // Found home
+            motor.stop();
+            motor.setCurrentPosition(0);
+            cmd.active = false;
+            cmd.isHoming = false;
+            cmd.homingPhase = 0;
+            Serial.println(homing_completed);
+        }
+    }
 }
 
 void setup() {
-  pinMode(13, OUTPUT);
-  pinMode(LED1, OUTPUT);
-  pinMode(LED2, OUTPUT);
-  pinMode(stepPin, OUTPUT);
-  pinMode(dirPin, OUTPUT);
-  pinMode(nable, OUTPUT);
-  pinMode(SIGNAL, INPUT);
-  
-  Serial.begin(9600);
-  digitalWrite(nable, LOW);
+    pinMode(LED1, OUTPUT);
+    pinMode(LED2, OUTPUT);
+    pinMode(stepPin1, OUTPUT);
+    pinMode(stepPin2, OUTPUT);
+    pinMode(dirPin1, OUTPUT);
+    pinMode(dirPin2, OUTPUT);
+    pinMode(nable1, OUTPUT);
+    pinMode(nable2, OUTPUT);
+    pinMode(SIGNAL1, INPUT);
+    pinMode(SIGNAL2, INPUT);
+    
+    Serial.begin(9600);
+    digitalWrite(nable1, LOW);  
+    digitalWrite(nable2, LOW); 
 
-  motor.setMaxSpeed(200);
-  motor.setAcceleration(100);
-  motor.setCurrentPosition(0);
+    motor1.setMaxSpeed(200);
+    motor1.setAcceleration(100);
+    motor1.setCurrentPosition(0);
+
+    motor2.setMaxSpeed(200);
+    motor2.setAcceleration(100);
+    motor2.setCurrentPosition(0);
 }
 
 void loop() {
-  if (Serial.available() > 0) {
-    incomingbyte = Serial.read();    
-    // Serial.write(incomingbyte);  // Echo the incoming byte
+    // Check for new commands
+    if (Serial.available() > 0) {
+        char incomingByte = Serial.read();
 
-    switch (incomingbyte) {
-      case 49:  // '1' -> Turn LED1 ON
-        digitalWrite(LED1, HIGH);
-        break;
-      
-      case 50:  // '2' -> Turn LED1 OFF
-        digitalWrite(LED1, LOW);
-        break;
-      
-      case 51:  // '3' -> Turn LED2 ON
-        digitalWrite(LED2, HIGH);
-        break;
-      
-      case 52:  // '4' -> Turn LED2 OFF
-        digitalWrite(LED2, LOW);
-        break;
-
-      case 53:  // '5' -> Rotate 180 degrees
-        motor.move(800);  
-        motor.runToPosition();
-        Serial.println(rotation_finished);
-        break;
-
-      case 54:  // '6' -> Rotate 120 degrees
-        motor.move(533);
-        motor.runToPosition();
-        Serial.println(rotation_finished);
-        break;
-
-      case 55:  // '7' -> Rotate -180 degrees
-        motor.move(-800);
-        motor.runToPosition();
-        Serial.println(rotation_finished);
-        break;
-
-      case 97:  // 'a' -> Home motor
-        if (digitalRead(SIGNAL)) {
-          moveUntilSensorState(true, 10000);   // Move forward until sensor is not triggered
+        // Handle LED commands immediately
+        switch (incomingByte) {
+            case '1': digitalWrite(LED1, HIGH); break;
+            case '2': digitalWrite(LED1, LOW); break;
+            case '3': digitalWrite(LED2, HIGH); break;
+            case '4': digitalWrite(LED2, LOW); break;
+            
+            // Special case for simultaneous 180-degree rotation
+            case '9':
+                motor1.move(800);
+                motor2.move(800);
+                motor1Command.active = true;
+                motor2Command.active = true;
+                motor1Command.isHoming = false;
+                motor2Command.isHoming = false;
+                break;
+                
+            default:
+                // Queue motor commands based on which motor they're for
+                if (incomingByte == '5' || incomingByte == '6' || incomingByte == 'a') {
+                    motor1Command.command = incomingByte;
+                    executeMotor1Command(incomingByte);
+                }
+                else if (incomingByte == '7' || incomingByte == '8' || incomingByte == 'b') {
+                    motor2Command.command = incomingByte;
+                    executeMotor2Command(incomingByte);
+                }
+                break;
         }
-        moveUntilSensorState(false, -10000);  // Move backward until sensor is triggered
-
-        motor.setCurrentPosition(0);  // Set home position
-        Serial.println(homing_completed);
-        break;
-
-      default:
-        break;
     }
-  }
+
+    // Run both motors if they have active commands
+    if (motor1Command.active) {
+        motor1.run();
+        if (motor1Command.isHoming) {
+            processHoming(motor1, motor1Command, SIGNAL1);
+        } else if (motor1.distanceToGo() == 0) {
+            motor1Command.active = false;
+            Serial.println(rotation_finished);
+        }
+    }
+
+    if (motor2Command.active) {
+        motor2.run();
+        if (motor2Command.isHoming) {
+            processHoming(motor2, motor2Command, SIGNAL2);
+        } else if (motor2.distanceToGo() == 0) {
+            motor2Command.active = false;
+            Serial.println(rotation_finished);
+        }
+    }
 }
