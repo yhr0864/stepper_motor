@@ -1,12 +1,11 @@
 #include <Arduino.h>
 #include <AccelStepper.h>
 
-// Define motor pins for Motor 1
+// Pin definitions
 #define stepPin1 26
 #define dirPin1 28
 #define nable1 24
 
-// Define motor pins for Motor 2
 #define stepPin2 46
 #define dirPin2 48
 #define nable2 A8
@@ -14,157 +13,181 @@
 #define LED1 10
 #define LED2 9
 
-#define SIGNAL1 3  // signal from sensor
-#define SIGNAL2 19  // signal from sensor
+#define SIGNAL1 3
+#define SIGNAL2 19
 
+// Common constants
 #define microSteps 8
-#define numBottlesTable1 2  // number of bottles on table -> 180 degrees per rotation
-#define numBottlesTable2 6  // number of bottles on table -> 60 degrees per rotation
-
+#define numBottlesTable1 2
+#define numBottlesTable2 6
 const char* rotation_finished = "Rotation Finished";
 const char* homing_completed = "Homing Completed";
 
-// Command structure
-struct MotorCommand {
-    bool active;
+class Motor {
+public:
+    AccelStepper& stepper;
+    const int stepPin;
+    const int dirPin;
+    const int sensorPin;
+    const int enablePin;
+    const int numBottles;
+    
+    // Command state
+    bool isActive;
     bool isHoming;
-    int numRotations;  // for last rotation each round we need steps_per_rotation_correction
-    int homingPhase;  // 0: not homing, 1: move away, 2: find home
+    int numRotations;
+    int homingPhase;
+    
+    // Constructor
+    Motor(AccelStepper& _stepper, int _stepPin, int _dirPin, int _sensorPin, int _enablePin, int _numBottles) 
+        : stepper(_stepper), 
+          stepPin(_stepPin),
+          dirPin(_dirPin),
+          sensorPin(_sensorPin), 
+          enablePin(_enablePin), 
+          numBottles(_numBottles),
+          isActive(false),
+          isHoming(false),
+          numRotations(1),
+          homingPhase(0) {}
+
+public:
+    virtual void init() {
+        pinMode(stepPin, OUTPUT);
+        pinMode(dirPin, OUTPUT);
+   
+        pinMode(enablePin, OUTPUT);
+        pinMode(sensorPin, INPUT);
+        
+        digitalWrite(enablePin, LOW);
+        
+        stepper.setMaxSpeed(200);
+        stepper.setAcceleration(100);
+    }
+
+    void LED1_on() {
+        digitalWrite(LED1, HIGH);
+    }
+
+    void LED1_off() {
+        digitalWrite(LED1, LOW);
+    }
+
+    void LED2_on() {
+        digitalWrite(LED2, HIGH);
+    }
+
+    void LED2_off() {
+        digitalWrite(LED2, LOW);
+    }
+
+    void rotate() {
+        if (isActive) return;
+        
+        // Calculate steps for rotation
+        int steps_per_rotation = 200 * microSteps / numBottles;
+        int steps_per_rotation_correction = 200 * microSteps - steps_per_rotation * (numBottles - 1);
+        
+        if (numRotations == numBottles) {
+            stepper.move(steps_per_rotation_correction);
+            numRotations = 1;
+        } else {
+            stepper.move(steps_per_rotation);
+            numRotations++;
+        }
+        
+        isActive = true;
+        isHoming = false;
+    }
+
+    void home() {
+        if (!isActive) {
+            // Start homing sequence
+            isActive = true;
+            isHoming = true;
+            
+            if (digitalRead(sensorPin)) {
+                // If sensor triggered, first move away
+                homingPhase = 1;
+                stepper.move(10000);
+            } else {
+                // If sensor not triggered, go straight to finding home
+                homingPhase = 2;
+                stepper.move(-10000);
+            }
+        } else {
+            // Continue homing sequence
+            if (homingPhase == 1 && !digitalRead(sensorPin)) {
+                // Moved away from sensor, now find home
+                stepper.move(-10000);
+                homingPhase = 2;
+            } 
+            else if (homingPhase == 2 && digitalRead(sensorPin)) {
+                // Found home
+                stepper.stop();
+                stepper.setCurrentPosition(0);
+                isActive = false;
+                isHoming = false;
+                numRotations = 1;
+                homingPhase = 0;
+                Serial.println(homing_completed);
+            }
+        }
+    }
+
+    void update() {
+        if (isActive) {
+            stepper.run();
+            if (isHoming) {
+                home();  // Continue homing sequence
+            } else if (stepper.distanceToGo() == 0) {
+                isActive = false;
+                Serial.println(rotation_finished);
+            }
+        }
+    }
 };
 
-MotorCommand motor1Command = {false, false, 1, 0};
-MotorCommand motor2Command = {false, false, 1, 0};
 
-// Define the motor drivers
-AccelStepper motor1(AccelStepper::DRIVER, stepPin1, dirPin1);
-AccelStepper motor2(AccelStepper::DRIVER, stepPin2, dirPin2);
+// Create motor instances
+AccelStepper stepper1(AccelStepper::DRIVER, stepPin1, dirPin1);
+AccelStepper stepper2(AccelStepper::DRIVER, stepPin2, dirPin2);
 
-// Regular motor movement function
-void moveMotor(AccelStepper &motor, MotorCommand &cmd, int numBottles) {
-    // for the first (numBottles-1) rotations
-    int steps_per_rotation = 200*microSteps/numBottles;
-    // for the last rotation: compensate the deviation
-    int steps_per_rotation_correction = 200*microSteps-steps_per_rotation*(numBottles-1); 
-
-    if (cmd.numRotations == numBottles) {
-        motor.move(steps_per_rotation_correction);
-        cmd.active = true;
-        cmd.isHoming = false;
-        cmd.numRotations = 1;
-    } else {
-        motor.move(steps_per_rotation);
-        cmd.active = true;
-        cmd.isHoming = false;
-        cmd.numRotations += 1;
-    }
-    
-}
-
-// Homing function
-void homeMotor(AccelStepper &motor, MotorCommand &cmd, int SIGNAL) {
-    if (!cmd.active) {
-        // Start homing sequence
-        cmd.active = true;
-        cmd.isHoming = true;
-        
-        if (digitalRead(SIGNAL)) {
-            // If sensor triggered, first move away
-            cmd.homingPhase = 1;
-            motor.move(10000);
-        } else {
-            // If sensor not triggered, go straight to finding home
-            cmd.homingPhase = 2;
-            motor.move(-10000);
-        }
-    } else {
-        // Continue homing sequence
-        if (cmd.homingPhase == 1 && !digitalRead(SIGNAL)) {
-            // Moved away from sensor, now find home
-            motor.move(-10000);
-            cmd.homingPhase = 2;
-        } 
-        else if (cmd.homingPhase == 2 && digitalRead(SIGNAL)) {
-            // Found home
-            motor.stop();
-            motor.setCurrentPosition(0);
-            cmd.active = false;
-            cmd.isHoming = false;
-            cmd.numRotations = 1;
-            cmd.homingPhase = 0;
-            Serial.println(homing_completed);
-        }
-    }
-}
+Motor motor1(stepper1, stepPin1, dirPin1, SIGNAL1, nable1, numBottlesTable1);
+Motor motor2(stepper2, stepPin2, dirPin2, SIGNAL2, nable2, numBottlesTable2);
 
 void setup() {
-    // Setup pins
+    Serial.begin(9600);
+    
     pinMode(LED1, OUTPUT);
     pinMode(LED2, OUTPUT);
-    pinMode(stepPin1, OUTPUT);
-    pinMode(stepPin2, OUTPUT);
-    pinMode(dirPin1, OUTPUT);
-    pinMode(dirPin2, OUTPUT);
-    pinMode(nable1, OUTPUT);
-    pinMode(nable2, OUTPUT);
-    pinMode(SIGNAL1, INPUT);
-    pinMode(SIGNAL2, INPUT);
-    
-    Serial.begin(9600);
-    digitalWrite(nable1, LOW);  
-    digitalWrite(nable2, LOW); 
 
-    // Configure motors
-    motor1.setMaxSpeed(200);
-    motor1.setAcceleration(100);
-    motor1.setCurrentPosition(0);
-
-    motor2.setMaxSpeed(200);
-    motor2.setAcceleration(100);
-    motor2.setCurrentPosition(0);
+    // Initialize both motors
+    motor1.init();
+    motor2.init();
 }
 
 void loop() {
     if (Serial.available() > 0) {
         char cmd = Serial.read();
         
-        // Handle commands
+        // To parse this part
         switch (cmd) {
             // LED controls
-            case '1': digitalWrite(LED1, HIGH); break;
-            case '2': digitalWrite(LED1, LOW); break;
-            case '3': digitalWrite(LED2, HIGH); break;
-            case '4': digitalWrite(LED2, LOW); break;
-            
-            // Motor 1 controls
-            case '5': moveMotor(motor1, motor1Command, numBottlesTable1); break;  // 180 degrees
-            case '6': moveMotor(motor1, motor1Command, -numBottlesTable1); break;  // -180 degrees
-            case 'a': homeMotor(motor1, motor1Command, SIGNAL1); break;
-            
-            // Motor 2 controls
-            case '7': moveMotor(motor2, motor2Command, numBottlesTable2); break;  // 60 degrees
-            case '8': moveMotor(motor2, motor2Command, -numBottlesTable2); break;  // -60 degrees
-            case 'b': homeMotor(motor2, motor2Command, SIGNAL2); break;
+            // case '1': motor1.LED1_on(); break;
+            // case '2': motor1.LED1_off(); break;
+            // case '3': digitalWrite(LED2, HIGH); break;
+            // case '4': digitalWrite(LED2, LOW); break;
+
+            // Motor controls
+            case '5': motor1.rotate(); break;
+            case '6': motor2.rotate(); break;
+            case 'a': motor1.home(); break;
+            case 'b': motor2.home(); break;
         }
     }
 
-    // Run active motors
-    if (motor1Command.active) {
-        motor1.run();
-        if (motor1Command.isHoming) {
-            homeMotor(motor1, motor1Command, SIGNAL1);  // Homing is not finished, still need to run 
-        } else if (motor1.distanceToGo() == 0) {
-            motor1Command.active = false;
-            Serial.println(rotation_finished);
-        }
-    }
-
-    if (motor2Command.active) {
-        motor2.run();
-        if (motor2Command.isHoming) {
-            homeMotor(motor2, motor2Command, SIGNAL2);
-        } else if (motor2.distanceToGo() == 0) {
-            motor2Command.active = false;
-            Serial.println(rotation_finished);
-        }
-    }
+    // Update motor states
+    motor1.update();
+    motor2.update();
 }
