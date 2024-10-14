@@ -1,3 +1,6 @@
+// #include <map>
+// #include <string>
+// #include <functional>
 #include <Arduino.h>
 #include <AccelStepper.h>
 
@@ -63,22 +66,6 @@ public:
         
         stepper.setMaxSpeed(200);
         stepper.setAcceleration(100);
-    }
-
-    void LED1_on() {
-        digitalWrite(LED1, HIGH);
-    }
-
-    void LED1_off() {
-        digitalWrite(LED1, LOW);
-    }
-
-    void LED2_on() {
-        digitalWrite(LED2, HIGH);
-    }
-
-    void LED2_off() {
-        digitalWrite(LED2, LOW);
     }
 
     void rotate() {
@@ -148,7 +135,6 @@ public:
     }
 };
 
-
 // Create motor instances
 AccelStepper stepper1(AccelStepper::DRIVER, stepPin1, dirPin1);
 AccelStepper stepper2(AccelStepper::DRIVER, stepPin2, dirPin2);
@@ -156,38 +142,73 @@ AccelStepper stepper2(AccelStepper::DRIVER, stepPin2, dirPin2);
 Motor motor1(stepper1, stepPin1, dirPin1, SIGNAL1, nable1, numBottlesTable1);
 Motor motor2(stepper2, stepPin2, dirPin2, SIGNAL2, nable2, numBottlesTable2);
 
+// Function pointer type
+typedef void (*CommandFunction)();
+
+// Command functions
+void led1On() { digitalWrite(LED1, HIGH); }
+void led1Off() { digitalWrite(LED1, LOW); }
+void led2On() { digitalWrite(LED2, HIGH); }
+void led2Off() { digitalWrite(LED2, LOW); }
+void motor1Rotate() { motor1.rotate(); }
+void motor1Home() { motor1.home(); }
+void motor2Rotate() { motor2.rotate(); }
+void motor2Home() { motor2.home(); }
+
+// Command structure
+struct Command {
+    const char* name;
+    CommandFunction function;
+};
+
+// Command lookup table
+const Command commands[] = {
+    {"LED1 on", led1On},
+    {"LED1 off", led1Off},
+    {"LED2 on", led2On},
+    {"LED2 off", led2Off},
+    {"motor1 rotate", motor1Rotate},
+    {"motor1 home", motor1Home},
+    {"motor2 rotate", motor2Rotate},
+    {"motor2 home", motor2Home},
+    {NULL, NULL}  // Sentinel to mark the end of the array
+};
+
+void executeCommand(const char* cmd) {
+    for (int i = 0; commands[i].name != NULL; i++) {
+        if (strcmp(cmd, commands[i].name) == 0) {
+            commands[i].function();
+            return;
+        }
+    }
+    Serial.println("Unknown command");
+}
+
 void setup() {
     Serial.begin(9600);
     
     pinMode(LED1, OUTPUT);
     pinMode(LED2, OUTPUT);
 
-    // Initialize both motors
     motor1.init();
     motor2.init();
 }
 
 void loop() {
     if (Serial.available() > 0) {
-        char cmd = Serial.read();
-        
-        // To parse this part
-        switch (cmd) {
-            // LED controls
-            // case '1': motor1.LED1_on(); break;
-            // case '2': motor1.LED1_off(); break;
-            // case '3': digitalWrite(LED2, HIGH); break;
-            // case '4': digitalWrite(LED2, LOW); break;
+        String cmd = Serial.readStringUntil('\n'); 
 
-            // Motor controls
-            case '5': motor1.rotate(); break;
-            case '6': motor2.rotate(); break;
-            case 'a': motor1.home(); break;
-            case 'b': motor2.home(); break;
-        }
+        // Remove any trailing whitespace or non-printable characters
+        cmd.trim();
+
+        // // Debug print the received command
+        // Serial.print("Received command: '");
+        // Serial.print(cmd);
+        // Serial.print("'\n");
+
+        executeCommand(cmd.c_str());
     }
 
-    // Update motor states
     motor1.update();
     motor2.update();
 }
