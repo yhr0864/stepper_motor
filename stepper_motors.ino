@@ -40,10 +40,19 @@ public:
     bool isHoming;
     int numRotations;
     int homingPhase;
+
+    int motorID;
     
     // Constructor
-    Motor(AccelStepper& _stepper, int _stepPin, int _dirPin, int _sensorPin, int _enablePin, int _numBottles) 
-        : stepper(_stepper), 
+    Motor(AccelStepper& _stepper, 
+          int _motorID, 
+          int _stepPin, 
+          int _dirPin, 
+          int _sensorPin, 
+          int _enablePin, 
+          int _numBottles) 
+        : stepper(_stepper),
+          motorID(_motorID),
           stepPin(_stepPin),
           dirPin(_dirPin),
           sensorPin(_sensorPin), 
@@ -117,7 +126,9 @@ public:
                 isHoming = false;
                 numRotations = 1;
                 homingPhase = 0;
-                Serial.println(homing_completed);
+
+                String message = "Motor" + String(motorID) + " " + String(homing_completed);
+                Serial.println(message);
             }
         }
     }
@@ -129,7 +140,8 @@ public:
                 home();  // Continue homing sequence
             } else if (stepper.distanceToGo() == 0) {
                 isActive = false;
-                Serial.println(rotation_finished);
+                String message = "Motor" + String(motorID) + " " + String(rotation_finished);
+                Serial.println(message);
             }
         }
     }
@@ -139,8 +151,8 @@ public:
 AccelStepper stepper1(AccelStepper::DRIVER, stepPin1, dirPin1);
 AccelStepper stepper2(AccelStepper::DRIVER, stepPin2, dirPin2);
 
-Motor motor1(stepper1, stepPin1, dirPin1, SIGNAL1, nable1, numBottlesTable1);
-Motor motor2(stepper2, stepPin2, dirPin2, SIGNAL2, nable2, numBottlesTable2);
+Motor motor1(stepper1, 1, stepPin1, dirPin1, SIGNAL1, nable1, numBottlesTable1);
+Motor motor2(stepper2, 2, stepPin2, dirPin2, SIGNAL2, nable2, numBottlesTable2);
 
 // Function pointer type
 typedef void (*CommandFunction)();
